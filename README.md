@@ -13,12 +13,18 @@ This is a Named Entity Recognition (NER) system designed to identify location na
 
 ## Setup
 
-1. Install the required dependencies:
+1. Make a virtual environment and activate it:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
+   ```
+
+2. Install the required dependencies:
    ```bash
    pip install -r requirements.txt
    ```
 
-2. Ensure you have the following files in the same directory:
+3. Ensure you have the following files in the same directory:
    - `places.json`: List of known locations
    - `type.json`: List of location types
    - `ner_system.py`: The main NER system
@@ -26,10 +32,10 @@ This is a Named Entity Recognition (NER) system designed to identify location na
 
 ## Usage
 
-Run the NER system with:
+Run the API server with:
 
 ```bash
-python ner_system.py
+python api.py
 ```
 
 Then enter the text you want to analyze when prompted. The system will identify:
