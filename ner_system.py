@@ -1,7 +1,5 @@
 import json
-import torch
-from transformers import AutoTokenizer, AutoModelForTokenClassification
-from typing import List, Dict, Tuple
+from typing import List, Dict
 
 class LocationNER:
     def __init__(self):
@@ -11,23 +9,7 @@ class LocationNER:
         self.locations_set = set(loc.lower() for loc in self.locations)
         self.types_set = set(t.lower() for t in self.types)
         
-        self.model = None
-        self.tokenizer = None
-        self.device = None
-    
-    def _ensure_model_loaded(self):
-        """Lazy-load the NER model only when needed."""
-        if self.model is None:
-            try:
-                self.model_name = "dslim/bert-base-NER"
-                self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-                self.model = AutoModelForTokenClassification.from_pretrained(self.model_name)
-                self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-                self.model = self.model.to(self.device)
-            except Exception as e:
-                print(f"Warning: Could not load NER model: {e}")
-                print("Falling back to exact matching only.")
-                self.model = None
+        # Model loading removed as we're using exact matching
     
     def _load_json(self, filename: str) -> List[str]:
         """Load JSON file containing locations or types."""
@@ -197,12 +179,9 @@ class LocationNER:
     
     def extract_locations(self, text: str) -> List[Dict]:
         """
-        Extract locations from the given text using both:
-        1. Exact match with known locations
-        2. NER model predictions
+        Extract locations and types from the given text using exact matching.
         """
-        # Check for exact matches first
-        exact_matches = []
+        entities = []
         words = text.split()
         
         # Check for multi-word locations (up to 5 words)
@@ -210,7 +189,7 @@ class LocationNER:
             for i in range(len(words) - n + 1):
                 phrase = ' '.join(words[i:i+n])
                 if self.is_location(phrase):
-                    exact_matches.append({
+                    entities.append({
                         'entity': phrase,
                         'type': 'LOC',
                         'source': 'exact_match'
@@ -221,33 +200,18 @@ class LocationNER:
                             words[j] = ""
         
         # Check for type words
-        type_matches = []
         for word in text.split():
-            if self.is_type(word):
-                type_matches.append({
+            if word and self.is_type(word):
+                entities.append({
                     'entity': word,
                     'type': 'TYPE',
                     'source': 'type_match'
                 })
         
-        # Get NER predictions for remaining text
-        remaining_text = ' '.join(word for word in words if word)
-        ner_entities = self.predict_entities(remaining_text)
-        
-        # Filter only LOCATION entities
-        ner_locations = [
-            {'entity': ent['entity'], 'type': ent['type'], 'source': 'ner'}
-             for ent in ner_entities 
-             if ent['type'] in ['LOC', 'GPE', 'FAC', 'ORG']
-        ]
-        
-        # Combine all results
-        all_entities = exact_matches + ner_locations + type_matches
-        
         # Remove duplicates (keeping the first occurrence)
         seen = set()
         unique_entities = []
-        for ent in all_entities:
+        for ent in entities:
             if ent['entity'] not in seen:
                 seen.add(ent['entity'])
                 unique_entities.append(ent)
