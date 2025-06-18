@@ -72,33 +72,72 @@ class LocationNER:
         2. Any word not in type or location is a name
         3. If location comes before type, they are both part of a name
         """
-        # Split text into words with their positions
+        # First, try to find multi-word locations (up to 3 words) before splitting into individual words
         words = []
-        word_start = 0
-        for word in text.split():
-            start = text.find(word, word_start)
-            end = start + len(word)
-            words.append({
-                'text': word,
-                'start': start,
-                'end': end,
-                'type': 'UNKNOWN',
-                'source': 'unmatched'
-            })
-            word_start = end + 1  # +1 for the space
+        word_list = text.split()
+        i = 0
+        n = len(word_list)
         
-        # First pass: Mark LOC and TYPE
-        for i, word in enumerate(words):
-            word_lower = word['text'].lower()
+        while i < n:
+            # Try to match the longest possible phrase first (up to 3 words)
+            matched = False
+            for j in range(min(3, n - i), 0, -1):
+                phrase = ' '.join(word_list[i:i+j]).lower()
+                if phrase in self.locations_set:
+                    # Found a multi-word location
+                    phrase_text = ' '.join(word_list[i:i+j])
+                    start = text.find(phrase_text, i)
+                    end = start + len(phrase_text)
+                    words.append({
+                        'text': phrase_text,
+                        'start': start,
+                        'end': end,
+                        'type': 'LOC',
+                        'source': 'exact_match'
+                    })
+                    i += j
+                    matched = True
+                    break
+                elif phrase in self.types_set:
+                    # Found a multi-word type
+                    phrase_text = ' '.join(word_list[i:i+j])
+                    start = text.find(phrase_text, i)
+                    end = start + len(phrase_text)
+                    words.append({
+                        'text': phrase_text,
+                        'start': start,
+                        'end': end,
+                        'type': 'TYPE',
+                        'source': 'exact_match'
+                    })
+                    i += j
+                    matched = True
+                    break
             
-            # Check for location
-            if word_lower in self.locations_set:
-                word['type'] = 'LOC'
-                word['source'] = 'exact_match'
-            # Check for type
-            elif word_lower in self.types_set:
-                word['type'] = 'TYPE'
-                word['source'] = 'exact_match'
+            if not matched:
+                # No multi-word match found, add as single word
+                word = word_list[i]
+                start = text.find(word, i)
+                end = start + len(word)
+                words.append({
+                    'text': word,
+                    'start': start,
+                    'end': end,
+                    'type': 'UNKNOWN',
+                    'source': 'unmatched'
+                })
+                i += 1
+        
+        # Now process any remaining UNKNOWN words as single words
+        for word in words:
+            if word['type'] == 'UNKNOWN':
+                word_lower = word['text'].lower()
+                if word_lower in self.locations_set:
+                    word['type'] = 'LOC'
+                    word['source'] = 'exact_match'
+                elif word_lower in self.types_set:
+                    word['type'] = 'TYPE'
+                    word['source'] = 'exact_match'
         
         # Second pass: Handle LOC followed by TYPE
         # Any LOC that comes before a TYPE should be marked as NAME
