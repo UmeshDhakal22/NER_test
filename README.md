@@ -38,7 +38,11 @@ Run the API server with:
 python api.py
 ```
 
-Then enter the text you want to analyze when prompted. The system will identify:
+The API will start running on `http://localhost:8000`.
+
+You can then make POST requests to `http://localhost:8000/analyze` with a JSON payload containing the text you want to analyze.
+
+The system will identify:
 - Exact location matches from your places list
 - Location types from your types list
 - Locations detected by the NER model
