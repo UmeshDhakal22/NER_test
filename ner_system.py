@@ -1,13 +1,21 @@
 import json
-from typing import List, Dict
+from typing import List, Dict, Tuple, Set
+from fuzzywuzzy import fuzz
+from collections import defaultdict
 
 class LocationNER:
-    def __init__(self):
+    def __init__(self, fuzzy_threshold: int = 90):
         self.locations = self._load_json('places.json')
         self.types = self._load_json('type.json')
         
         self.locations_set = set(loc.lower() for loc in self.locations)
         self.types_set = set(t.lower() for t in self.types)
+        
+        # Create a dictionary of first two letters to possible matches for faster fuzzy matching
+        self.locations_index = self._build_fuzzy_index(self.locations)
+        self.types_index = self._build_fuzzy_index(self.types)
+        
+        self.fuzzy_threshold = fuzzy_threshold  # Default threshold of 90% similarity
         
         # Model loading removed as we're using exact matching
     
@@ -75,7 +83,9 @@ class LocationNER:
                         'start': start,
                         'end': end,
                         'type': 'LOC',
-                        'source': 'exact_match'
+                        'source': 'exact_match',
+                        'match': phrase_text,
+                        'score': 100
                     })
                     i += j
                     matched = True
@@ -90,7 +100,9 @@ class LocationNER:
                         'start': start,
                         'end': end,
                         'type': 'TYPE',
-                        'source': 'exact_match'
+                        'source': 'exact_match',
+                        'match': phrase_text,
+                        'score': 100
                     })
                     i += j
                     matched = True
@@ -106,7 +118,9 @@ class LocationNER:
                     'start': start,
                     'end': end,
                     'type': 'UNKNOWN',
-                    'source': 'unmatched'
+                    'source': 'unmatched',
+                    'match': '',
+                    'score': 0
                 })
                 i += 1
         
@@ -117,9 +131,30 @@ class LocationNER:
                 if word_lower in self.locations_set:
                     word['type'] = 'LOC'
                     word['source'] = 'exact_match'
+                    word['match'] = word_lower
+                    word['score'] = 100
                 elif word_lower in self.types_set:
                     word['type'] = 'TYPE'
                     word['source'] = 'exact_match'
+                    word['match'] = word_lower
+                    word['score'] = 100
+                else:
+                    # Check for fuzzy matches
+                    loc_matches = self._get_fuzzy_matches(word_lower, self.locations_set, self.locations_index)
+                    type_matches = self._get_fuzzy_matches(word_lower, self.types_set, self.types_index)
+                    
+                    if loc_matches:
+                        best_match = max(loc_matches, key=lambda x: fuzz.ratio(word_lower, x))
+                        word['type'] = 'LOC'
+                        word['source'] = 'fuzzy_match'
+                        word['match'] = best_match
+                        word['score'] = fuzz.ratio(word_lower, best_match)
+                    elif type_matches:
+                        best_match = max(type_matches, key=lambda x: fuzz.ratio(word_lower, x))
+                        word['type'] = 'TYPE'
+                        word['source'] = 'fuzzy_match'
+                        word['match'] = best_match
+                        word['score'] = fuzz.ratio(word_lower, best_match)
         
         # Second pass: Handle LOC followed by TYPE
         # Any LOC that comes before a TYPE should be marked as NAME
@@ -130,6 +165,10 @@ class LocationNER:
             
             # If current is LOC and next is TYPE, mark current as NAME
             if current['type'] == 'LOC' and next_word['type'] == 'TYPE':
+                if current.get('source') == 'unmatched':
+                    current['source'] = 'unmatched_text'
+                    current['match'] = ''
+                    current['score'] = 0
                 current['type'] = 'NAME'
                 current['source'] = 'loc_before_type'
             i += 1
@@ -139,6 +178,8 @@ class LocationNER:
             if word['type'] == 'UNKNOWN':
                 word['type'] = 'NAME'
                 word['source'] = 'unmatched_text'
+                word['match'] = ''
+                word['score'] = 0
         
         # Combine adjacent same-type words
         combined_entities = []
@@ -152,11 +193,15 @@ class LocationNER:
                     word['start'] == current_entity['end'] + 1):  # +1 for space
                     current_entity['text'] += ' ' + word['text']
                     current_entity['end'] = word['end']
+                    current_entity['match'] = current_entity.get('match', current_entity['text'])
+                    current_entity['score'] = current_entity.get('score', 100)
                 else:
                     combined_entities.append({
                         'entity': current_entity['text'],
                         'type': current_entity['type'],
-                        'source': current_entity['source']
+                        'source': current_entity['source'],
+                        'match': current_entity.get('match', current_entity['text']),
+                        'score': current_entity.get('score', 100)
                     })
                     current_entity = dict(word)
             
@@ -164,22 +209,65 @@ class LocationNER:
             combined_entities.append({
                 'entity': current_entity['text'],
                 'type': current_entity['type'],
-                'source': current_entity['source']
+                'source': current_entity['source'],
+                'match': current_entity.get('match', current_entity['text']),
+                'score': current_entity.get('score', 100)
             })
         
         return combined_entities
     
+    def _build_fuzzy_index(self, words: List[str]) -> Dict[str, Set[str]]:
+        """Build an index of words by their first two letters for faster fuzzy matching."""
+        index = defaultdict(set)
+        for word in words:
+            word_lower = word.lower()
+            if len(word_lower) >= 2:
+                key = word_lower[:2]
+                index[key].add(word_lower)
+        return index
+    
+    def _get_fuzzy_matches(self, text: str, word_set: Set[str], index: Dict[str, Set[str]]) -> List[str]:
+        """Find fuzzy matches for the given text in the word set using the index."""
+        text_lower = text.lower()
+        if len(text_lower) < 2:
+            return []
+            
+        # Check exact match first
+        if text_lower in word_set:
+            return [text_lower]
+            
+        # Get potential matches using the first two letters
+        key = text_lower[:2]
+        potential_matches = index.get(key, set())
+        
+        # Find matches above threshold
+        matches = []
+        for word in potential_matches:
+            if abs(len(word) - len(text_lower)) > 2:  # Skip if lengths differ by more than 2
+                continue
+            ratio = fuzz.ratio(text_lower, word)
+            if ratio >= self.fuzzy_threshold:
+                matches.append(word)
+        
+        return matches
+    
     def is_location(self, text: str) -> bool:
-        """Check if the given text is a known location."""
-        return text.lower() in self.locations_set
+        """Check if the given text is a known location with fuzzy matching."""
+        text_lower = text.lower()
+        if text_lower in self.locations_set:
+            return True
+        return len(self._get_fuzzy_matches(text, self.locations_set, self.locations_index)) > 0
     
     def is_type(self, text: str) -> bool:
-        """Check if the given text is a known type."""
-        return text.lower() in self.types_set
+        """Check if the given text is a known type with fuzzy matching."""
+        text_lower = text.lower()
+        if text_lower in self.types_set:
+            return True
+        return len(self._get_fuzzy_matches(text, self.types_set, self.types_index)) > 0
     
     def extract_locations(self, text: str) -> List[Dict]:
         """
-        Extract locations and types from the given text using exact matching.
+        Extract locations and types from the given text with fuzzy matching.
         """
         entities = []
         words = text.split()
@@ -187,25 +275,73 @@ class LocationNER:
         # Check for multi-word locations (up to 5 words)
         for n in range(5, 0, -1):
             for i in range(len(words) - n + 1):
+                if not any(words[i:i+n]):  # Skip if any word is already matched
+                    continue
+                    
                 phrase = ' '.join(words[i:i+n])
-                if self.is_location(phrase):
+                phrase_lower = phrase.lower()
+                
+                # Check for exact match first
+                if phrase_lower in self.locations_set:
                     entities.append({
                         'entity': phrase,
                         'type': 'LOC',
-                        'source': 'exact_match'
+                        'source': 'exact_match',
+                        'score': 100
+                    })
+                    # Mark these words as matched
+                    for j in range(i, i+n):
+                        if j < len(words):
+                            words[j] = ""
+                    continue
+                
+                # Check for fuzzy matches
+                fuzzy_matches = self._get_fuzzy_matches(phrase, self.locations_set, self.locations_index)
+                if fuzzy_matches:
+                    # Get the best match
+                    best_match = max(fuzzy_matches, key=lambda x: fuzz.ratio(phrase_lower, x))
+                    score = fuzz.ratio(phrase_lower, best_match)
+                    entities.append({
+                        'entity': phrase,
+                        'type': 'LOC',
+                        'source': 'fuzzy_match',
+                        'match': best_match,
+                        'score': score
                     })
                     # Mark these words as matched
                     for j in range(i, i+n):
                         if j < len(words):
                             words[j] = ""
         
-        # Check for type words
+        # Check for type words with fuzzy matching
         for word in text.split():
-            if word and self.is_type(word):
+            if not word:
+                continue
+                
+            word_lower = word.lower()
+            
+            # Check exact match first
+            if word_lower in self.types_set:
                 entities.append({
                     'entity': word,
                     'type': 'TYPE',
-                    'source': 'type_match'
+                    'source': 'exact_match',
+                    'score': 100
+                })
+                continue
+                
+            # Check for fuzzy matches
+            fuzzy_matches = self._get_fuzzy_matches(word, self.types_set, self.types_index)
+            if fuzzy_matches:
+                # Get the best match
+                best_match = max(fuzzy_matches, key=lambda x: fuzz.ratio(word_lower, x))
+                score = fuzz.ratio(word_lower, best_match)
+                entities.append({
+                    'entity': word,
+                    'type': 'TYPE',
+                    'source': 'fuzzy_match',
+                    'match': best_match,
+                    'score': score
                 })
         
         # Remove duplicates (keeping the first occurrence)
