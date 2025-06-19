@@ -25,6 +25,10 @@ class TextRequest(BaseModel):
 class EntityResponse(BaseModel):
     entity: str
     type: str
+    source: str
+    match: str
+    score: int
+
 
 class NERResponse(BaseModel):
     text: str
@@ -63,7 +67,10 @@ async def analyze_text(request: TextRequest):
             if entity['entity'].strip():
                 filtered_entities.append({
                     'entity': entity['entity'],
-                    'type': entity['type']
+                    'type': entity['type'],
+                    'source': entity['source'],
+                    'match': entity['match'],
+                    'score': entity['score']
                 })
         
         return NERResponse(
